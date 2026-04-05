@@ -4,7 +4,7 @@
 
 - You can type to Rocky or talk to Rocky through your microphone.
 - Local `faster-whisper` transcription turns microphone audio into text.
-- Anthropic generates a reply in Rocky's voice and personality.
+- Claude will generate a reply in Rocky's voice and personality, all tunable in `rocky_system.txt`.
 - Cartesia turns the reply into audio with a higher-quality conversational voice.
 - The app can still fall back to built-in macOS speech if you want a free local backup.
 
@@ -74,29 +74,21 @@ In `voice_vad` mode, Rocky listens continuously, starts recording when speech is
 
 - The prompt is deliberately stored in a separate text file so you can iterate on Rocky's voice quickly.
 - Conversation history is kept in memory for the current session.
-- Voice input uses local `faster-whisper`, so there is no transcription API cost.
+- Voice input uses local `faster-whisper`, so there is no transcription API cost (ur welcome).
 - The first transcription run may download the selected Whisper model to your machine.
 - `voice_vad` uses WebRTC VAD, which expects 16-bit mono PCM audio at 8000, 16000, or 32000 Hz and frame sizes of 10, 20, or 30 ms.
 - `TTS_BACKEND=cartesia` is the default.
-- If Cartesia is unavailable, you can switch to `TTS_BACKEND=macos_say`.
+- If Cartesia is unavailable, you can switch to `TTS_BACKEND=macos_say`. (Note: TTS through this method sounds completely devoid of life)
 - You can tune `WHISPER_MODEL_SIZE`, `WHISPER_COMPUTE_TYPE`, `CARTESIA_MODEL_ID`, `CARTESIA_VOICE_ID`, `CARTESIA_SPEED`, the manual microphone settings, and the VAD thresholds in `.env`.
-
-## Next Steps
-
-- Stream Claude text as it is generated
-- Replace one-shot TTS playback with streaming audio output
-- Drive jaw movement from audio amplitude
-- Send mouth openness values over serial to an Arduino
 
 ## Character Tuning
 
 Treat `prompts/rocky_system.txt` like code.
 
 When Rocky says something that feels off:
-
 - adjust the speech rules
 - add or remove examples
 - tighten the constraints
 - rerun and compare
 
-The fastest path to a believable character is lots of short prompt iterations.
+The fastest path to a believable character is lots of short prompt iterations!!!
