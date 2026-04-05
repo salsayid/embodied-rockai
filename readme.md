@@ -6,7 +6,8 @@ The goal of this repo is to get the character and conversation loop feeling righ
 
 ## What This MVP Does
 
-- You type to Rocky in the terminal.
+- You can type to Rocky or talk to Rocky through your microphone.
+- Local `faster-whisper` transcription turns microphone audio into text.
 - Anthropic generates a reply in Rocky's voice and personality.
 - Cartesia turns the reply into audio with a higher-quality conversational voice.
 - The app can still fall back to built-in macOS speech if you want a free local backup.
@@ -57,17 +58,26 @@ python -m src.rocky_mvp
 
 Then type to Rocky. Use `quit` or `exit` to stop.
 
+To use microphone input, set:
+
+```env
+INPUT_MODE=voice
+```
+
+In voice mode, press Enter once to start recording and press Enter again to stop. The app will transcribe your speech, send it to Rocky, and speak the reply back.
+
 ## Notes
 
 - The prompt is deliberately stored in a separate text file so you can iterate on Rocky's voice quickly.
 - Conversation history is kept in memory for the current session.
+- Voice input uses local `faster-whisper`, so there is no transcription API cost.
+- The first transcription run may download the selected Whisper model to your machine.
 - `TTS_BACKEND=cartesia` is the default.
 - If Cartesia is unavailable, you can switch to `TTS_BACKEND=macos_say`.
-- You can tune `CARTESIA_MODEL_ID`, `CARTESIA_VOICE_ID`, and `CARTESIA_SPEED` in `.env`.
+- You can tune `WHISPER_MODEL_SIZE`, `WHISPER_COMPUTE_TYPE`, `CARTESIA_MODEL_ID`, `CARTESIA_VOICE_ID`, `CARTESIA_SPEED`, and the microphone settings in `.env`.
 
 ## Next Steps
 
-- Add microphone input with Whisper
 - Add VAD for fast turn detection
 - Stream Claude text as it is generated
 - Replace one-shot TTS playback with streaming audio output

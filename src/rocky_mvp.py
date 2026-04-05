@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import io
 import os
 import platform
 import subprocess
 import tempfile
+import threading
+import wave
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
+from faster_whisper import WhisperModel
 import requests
+import sounddevice as sd
 
 
 ROOT = Path(__file__).resolve().parent.parent
 PROMPT_PATH = ROOT / "prompts" / "rocky_system.txt"
+WHISPER_MODEL: WhisperModel | None = None
 
 
 def load_required_env(name: str) -> str:
@@ -48,6 +54,52 @@ def generate_reply(client: Anthropic, system_prompt: str, history: List[Dict[str
     return "".join(text_parts).strip()
 
 
+def get_whisper_model() -> WhisperModel:
+    global WHISPER_MODEL
+
+    if WHISPER_MODEL is not None:
+        return WHISPER_MODEL
+
+    model_size = os.getenv("WHISPER_MODEL_SIZE", "base").strip() or "base"
+    model_device = os.getenv("WHISPER_DEVICE", "auto").strip() or "auto"
+    compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
+
+    print(f"Loading faster-whisper model `{model_size}` on `{model_device}`...")
+    WHISPER_MODEL = WhisperModel(model_size, device=model_device, compute_type=compute_type)
+    return WHISPER_MODEL
+
+
+def transcribe_audio(audio_bytes: bytes) -> str:
+    model = get_whisper_model()
+    language = os.getenv("WHISPER_LANGUAGE", "en").strip() or "en"
+    beam_size = int(os.getenv("WHISPER_BEAM_SIZE", "5"))
+    vad_filter = os.getenv("WHISPER_VAD_FILTER", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        tmp.write(audio_bytes)
+        tmp_path = Path(tmp.name)
+
+    try:
+        segments, info = model.transcribe(
+            str(tmp_path),
+            language=language,
+            beam_size=beam_size,
+            vad_filter=vad_filter,
+        )
+        segment_list = list(segments)
+    except Exception as exc:
+        raise RuntimeError(f"faster-whisper transcription failed: {exc}") from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    text = " ".join(segment.text.strip() for segment in segment_list if segment.text.strip()).strip()
+    if not text:
+        raise RuntimeError("faster-whisper returned no text.")
+
+    print(f"Detected language: {info.language} ({info.language_probability:.2f})")
+    return text
+
+
 def explain_error(exc: Exception) -> str:
     message = str(exc)
     lowered = message.lower()
@@ -57,6 +109,12 @@ def explain_error(exc: Exception) -> str:
             "Anthropic rejected ANTHROPIC_API_KEY. Check that `.env` contains a real Anthropic key, "
             "not a placeholder, old key, or ElevenLabs key."
         )
+
+    if "faster-whisper transcription failed" in lowered:
+        return "Local faster-whisper transcription failed. Check your microphone audio, model settings, or first-run model download."
+
+    if "microphone capture failed" in lowered:
+        return "Microphone capture failed. Check macOS microphone permission and your selected input device."
 
     if "say" in lowered and "no such file or directory" in lowered:
         return "macOS `say` was not found. This free local speech path currently expects macOS."
@@ -71,6 +129,77 @@ def explain_error(exc: Exception) -> str:
         return "Cartesia returned 402 Payment Required. The API key likely works, but the account or plan cannot generate audio right now."
 
     return message
+
+
+def prompt_for_user_text() -> str:
+    input_mode = os.getenv("INPUT_MODE", "text").strip().lower() or "text"
+
+    if input_mode == "voice":
+        return prompt_for_voice_input()
+
+    return input("\nYou: ").strip()
+
+
+def prompt_for_voice_input() -> str:
+    sample_rate = int(os.getenv("MIC_SAMPLE_RATE", "16000"))
+    channels = int(os.getenv("MIC_CHANNELS", "1"))
+    blocksize = int(os.getenv("MIC_BLOCKSIZE", "1024"))
+    max_seconds = float(os.getenv("MIC_MAX_SECONDS", "20"))
+
+    input("\nPress Enter to start recording.")
+    print("Recording... press Enter to stop.")
+
+    stop_event = threading.Event()
+
+    def wait_for_stop() -> None:
+        input()
+        stop_event.set()
+
+    waiter = threading.Thread(target=wait_for_stop, daemon=True)
+    waiter.start()
+
+    frames: List[bytes] = []
+    max_frames = max(1, int(sample_rate * max_seconds))
+    collected_frames = 0
+
+    try:
+        with sd.RawInputStream(
+            samplerate=sample_rate,
+            channels=channels,
+            dtype="int16",
+            blocksize=blocksize,
+        ) as stream:
+            while not stop_event.is_set() and collected_frames < max_frames:
+                chunk, overflowed = stream.read(blocksize)
+                if overflowed:
+                    print("Microphone buffer overflowed; continuing with captured audio.")
+                frames.append(bytes(chunk))
+                collected_frames += blocksize
+    except Exception as exc:
+        raise RuntimeError(f"Microphone capture failed: {exc}") from exc
+
+    stop_event.set()
+
+    if not frames:
+        raise RuntimeError("No audio was captured from the microphone.")
+
+    if collected_frames >= max_frames:
+        print(f"Reached max recording length of {max_seconds:.0f} seconds. Stopping automatically.")
+
+    audio_bytes = wav_bytes_from_frames(frames, sample_rate=sample_rate, channels=channels, sample_width=2)
+    transcript = transcribe_audio(audio_bytes)
+    print(f"\nYou said: {transcript}")
+    return transcript
+
+
+def wav_bytes_from_frames(frames: List[bytes], sample_rate: int, channels: int, sample_width: int) -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(sample_width)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"".join(frames))
+    return buffer.getvalue()
 
 
 def speak_text_macos(text: str) -> None:
@@ -172,10 +301,19 @@ def main() -> None:
     history: List[Dict[str, str]] = []
 
     print("Rocky terminal MVP")
-    print("Type to Rocky. Use 'quit' or 'exit' to stop.")
+    input_mode = os.getenv("INPUT_MODE", "text").strip().lower() or "text"
+    if input_mode == "voice":
+        print("Voice mode is on. Press Enter to start and stop each recording. Say 'quit' or 'exit' to stop.")
+    else:
+        print("Type to Rocky. Use 'quit' or 'exit' to stop.")
 
     while True:
-        user_text = input("\nYou: ").strip()
+        try:
+            user_text = prompt_for_user_text()
+        except Exception as exc:
+            print(f"\nInput unavailable: {explain_error(exc)}")
+            continue
+
         if not user_text:
             continue
         if user_text.lower() in {"quit", "exit"}:
