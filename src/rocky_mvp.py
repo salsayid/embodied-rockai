@@ -6,6 +6,7 @@ import platform
 import subprocess
 import tempfile
 import threading
+import time
 import wave
 from collections import deque
 from pathlib import Path
@@ -33,6 +34,23 @@ def load_required_env(name: str) -> str:
 
 def load_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8").strip()
+
+
+def latency_enabled() -> bool:
+    return os.getenv("SHOW_LATENCY", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def log_latency(label: str, started_at: float, turn_started_at: float | None = None) -> None:
+    if not latency_enabled():
+        return
+
+    elapsed = time.perf_counter() - started_at
+    if turn_started_at is None:
+        print(f"[latency] {label}: {elapsed:.3f}s")
+        return
+
+    total = time.perf_counter() - turn_started_at
+    print(f"[latency] {label}: {elapsed:.3f}s (turn total: {total:.3f}s)")
 
 
 def build_messages(history: List[Dict[str, str]]) -> List[Dict[str, str]]:
@@ -191,7 +209,9 @@ def prompt_for_voice_input() -> str:
         print(f"Reached max recording length of {max_seconds:.0f} seconds. Stopping automatically.")
 
     audio_bytes = wav_bytes_from_frames(frames, sample_rate=sample_rate, channels=channels, sample_width=2)
+    transcription_started_at = time.perf_counter()
     transcript = transcribe_audio(audio_bytes)
+    log_latency("transcription", transcription_started_at)
     print(f"\nYou said: {transcript}")
     return transcript
 
@@ -275,7 +295,9 @@ def prompt_for_voice_vad_input() -> str:
         return ""
 
     audio_bytes = wav_bytes_from_frames(frames, sample_rate=sample_rate, channels=1, sample_width=2)
+    transcription_started_at = time.perf_counter()
     transcript = transcribe_audio(audio_bytes)
+    log_latency("transcription", transcription_started_at)
     print(f"\nYou said: {transcript}")
     return transcript
 
@@ -398,8 +420,11 @@ def main() -> None:
         print("Type to Rocky. Use 'quit' or 'exit' to stop.")
 
     while True:
+        turn_started_at = time.perf_counter()
         try:
+            input_started_at = time.perf_counter()
             user_text = prompt_for_user_text()
+            log_latency("input capture", input_started_at, turn_started_at)
         except Exception as exc:
             print(f"\nInput unavailable: {explain_error(exc)}")
             continue
@@ -413,7 +438,9 @@ def main() -> None:
         history.append({"role": "user", "content": user_text})
 
         try:
+            llm_started_at = time.perf_counter()
             rocky_reply = generate_reply(client, system_prompt, history)
+            log_latency("llm response", llm_started_at, turn_started_at)
             history.append({"role": "assistant", "content": rocky_reply})
 
             print(f"\nRocky: {rocky_reply}")
@@ -422,10 +449,14 @@ def main() -> None:
             continue
 
         try:
+            tts_started_at = time.perf_counter()
             speak_text(rocky_reply)
+            log_latency("tts + playback", tts_started_at, turn_started_at)
+            log_latency("full turn", turn_started_at)
         except Exception as exc:
             print(f"\nAudio unavailable: {explain_error(exc)}")
             print("Rocky will keep responding in text while local speech is unavailable.")
+            log_latency("full turn without audio", turn_started_at)
 
 
 if __name__ == "__main__":
