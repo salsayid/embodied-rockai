@@ -1,10 +1,6 @@
 # Embodied Rocky AI
 
-Software-first MVP for a physical Rocky animatronic inspired by *Project Hail Mary*.
-
-The goal of this repo is to get the character and conversation loop feeling right before any hardware work starts.
-
-## What This MVP Does
+## Basic stuff
 
 - You can type to Rocky or talk to Rocky through your microphone.
 - Local `faster-whisper` transcription turns microphone audio into text.
