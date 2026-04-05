@@ -8,8 +8,8 @@ The goal of this repo is to get the character and conversation loop feeling righ
 
 - You type to Rocky in the terminal.
 - Anthropic generates a reply in Rocky's voice and personality.
-- Built-in macOS speech turns the reply into audio for free.
-- The audio plays back on your laptop with no separate TTS account needed.
+- Cartesia turns the reply into audio with a higher-quality conversational voice.
+- The app can still fall back to built-in macOS speech if you want a free local backup.
 
 This is the simplest version of the eventual full puppet pipeline:
 
@@ -46,6 +46,8 @@ cp .env.example .env
 4. Fill in your keys in `.env`:
 
 - `ANTHROPIC_API_KEY`
+- `CARTESIA_API_KEY`
+- `CARTESIA_VOICE_ID`
 
 ## Run
 
@@ -59,15 +61,16 @@ Then type to Rocky. Use `quit` or `exit` to stop.
 
 - The prompt is deliberately stored in a separate text file so you can iterate on Rocky's voice quickly.
 - Conversation history is kept in memory for the current session.
-- Speech uses the built-in macOS `say` command, so there is no TTS API cost.
-- You can tweak `MACOS_TTS_VOICE` and `MACOS_TTS_RATE` in `.env`.
+- `TTS_BACKEND=cartesia` is the default.
+- If Cartesia is unavailable, you can switch to `TTS_BACKEND=macos_say`.
+- You can tune `CARTESIA_MODEL_ID`, `CARTESIA_VOICE_ID`, and `CARTESIA_SPEED` in `.env`.
 
 ## Next Steps
 
 - Add microphone input with Whisper
 - Add VAD for fast turn detection
 - Stream Claude text as it is generated
-- Replace macOS speech with a better local voice engine like Piper
+- Replace one-shot TTS playback with streaming audio output
 - Drive jaw movement from audio amplitude
 - Send mouth openness values over serial to an Arduino
 
