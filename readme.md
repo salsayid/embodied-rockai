@@ -62,19 +62,27 @@ INPUT_MODE=voice
 
 In voice mode, press Enter once to start recording and press Enter again to stop. The app will transcribe your speech, send it to Rocky, and speak the reply back.
 
+To use automatic speech-end detection, set:
+
+```env
+INPUT_MODE=voice_vad
+```
+
+In `voice_vad` mode, Rocky listens continuously, starts recording when speech is detected, and stops automatically after trailing silence. The current manual `voice` mode remains available as a fallback.
+
 ## Notes
 
 - The prompt is deliberately stored in a separate text file so you can iterate on Rocky's voice quickly.
 - Conversation history is kept in memory for the current session.
 - Voice input uses local `faster-whisper`, so there is no transcription API cost.
 - The first transcription run may download the selected Whisper model to your machine.
+- `voice_vad` uses WebRTC VAD, which expects 16-bit mono PCM audio at 8000, 16000, or 32000 Hz and frame sizes of 10, 20, or 30 ms.
 - `TTS_BACKEND=cartesia` is the default.
 - If Cartesia is unavailable, you can switch to `TTS_BACKEND=macos_say`.
-- You can tune `WHISPER_MODEL_SIZE`, `WHISPER_COMPUTE_TYPE`, `CARTESIA_MODEL_ID`, `CARTESIA_VOICE_ID`, `CARTESIA_SPEED`, and the microphone settings in `.env`.
+- You can tune `WHISPER_MODEL_SIZE`, `WHISPER_COMPUTE_TYPE`, `CARTESIA_MODEL_ID`, `CARTESIA_VOICE_ID`, `CARTESIA_SPEED`, the manual microphone settings, and the VAD thresholds in `.env`.
 
 ## Next Steps
 
-- Add VAD for fast turn detection
 - Stream Claude text as it is generated
 - Replace one-shot TTS playback with streaming audio output
 - Drive jaw movement from audio amplitude

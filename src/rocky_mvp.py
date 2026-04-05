@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import threading
 import wave
+from collections import deque
 from pathlib import Path
 from typing import Dict, List
 
@@ -15,6 +16,7 @@ from dotenv import load_dotenv
 from faster_whisper import WhisperModel
 import requests
 import sounddevice as sd
+import webrtcvad
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,7 +62,7 @@ def get_whisper_model() -> WhisperModel:
     if WHISPER_MODEL is not None:
         return WHISPER_MODEL
 
-    model_size = os.getenv("WHISPER_MODEL_SIZE", "base").strip() or "base"
+    model_size = os.getenv("WHISPER_MODEL_SIZE", "tiny").strip() or "tiny"
     model_device = os.getenv("WHISPER_DEVICE", "auto").strip() or "auto"
     compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8"
 
@@ -136,6 +138,8 @@ def prompt_for_user_text() -> str:
 
     if input_mode == "voice":
         return prompt_for_voice_input()
+    if input_mode == "voice_vad":
+        return prompt_for_voice_vad_input()
 
     return input("\nYou: ").strip()
 
@@ -187,6 +191,90 @@ def prompt_for_voice_input() -> str:
         print(f"Reached max recording length of {max_seconds:.0f} seconds. Stopping automatically.")
 
     audio_bytes = wav_bytes_from_frames(frames, sample_rate=sample_rate, channels=channels, sample_width=2)
+    transcript = transcribe_audio(audio_bytes)
+    print(f"\nYou said: {transcript}")
+    return transcript
+
+
+def prompt_for_voice_vad_input() -> str:
+    sample_rate = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
+    frame_duration_ms = int(os.getenv("VAD_FRAME_MS", "20"))
+    aggressiveness = int(os.getenv("VAD_AGGRESSIVENESS", "2"))
+    start_frames = int(os.getenv("VAD_START_FRAMES", "3"))
+    end_silence_frames = int(os.getenv("VAD_END_SILENCE_FRAMES", "9"))
+    preroll_frames = int(os.getenv("VAD_PREROLL_FRAMES", "8"))
+    max_seconds = float(os.getenv("VAD_MAX_SECONDS", "12"))
+
+    if sample_rate not in {8000, 16000, 32000}:
+        raise RuntimeError("VAD_SAMPLE_RATE must be one of 8000, 16000, or 32000.")
+    if frame_duration_ms not in {10, 20, 30}:
+        raise RuntimeError("VAD_FRAME_MS must be 10, 20, or 30.")
+    if aggressiveness not in {0, 1, 2, 3}:
+        raise RuntimeError("VAD_AGGRESSIVENESS must be between 0 and 3.")
+
+    frame_samples = sample_rate * frame_duration_ms // 1000
+    frame_bytes = frame_samples * 2
+    max_frames = max(1, int(max_seconds * 1000 / frame_duration_ms))
+    vad = webrtcvad.Vad(aggressiveness)
+
+    print("\nListening for speech...")
+
+    frames: List[bytes] = []
+    preroll: deque[bytes] = deque(maxlen=preroll_frames)
+    speech_started = False
+    voiced_run = 0
+    silence_run = 0
+
+    try:
+        with sd.RawInputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype="int16",
+            blocksize=frame_samples,
+        ) as stream:
+            while True:
+                chunk, overflowed = stream.read(frame_samples)
+                if overflowed:
+                    print("Microphone buffer overflowed; continuing with captured audio.")
+
+                frame = bytes(chunk)
+                if len(frame) != frame_bytes:
+                    continue
+
+                is_speech = vad.is_speech(frame, sample_rate)
+
+                if not speech_started:
+                    preroll.append(frame)
+                    if is_speech:
+                        voiced_run += 1
+                    else:
+                        voiced_run = 0
+
+                    if voiced_run >= start_frames:
+                        speech_started = True
+                        frames.extend(preroll)
+                        print("Speech detected.")
+                    continue
+
+                frames.append(frame)
+                if is_speech:
+                    silence_run = 0
+                else:
+                    silence_run += 1
+
+                if silence_run >= end_silence_frames:
+                    break
+
+                if len(frames) >= max_frames:
+                    print(f"Reached max VAD recording length of {max_seconds:.0f} seconds. Stopping automatically.")
+                    break
+    except Exception as exc:
+        raise RuntimeError(f"Microphone capture failed: {exc}") from exc
+
+    if not frames:
+        return ""
+
+    audio_bytes = wav_bytes_from_frames(frames, sample_rate=sample_rate, channels=1, sample_width=2)
     transcript = transcribe_audio(audio_bytes)
     print(f"\nYou said: {transcript}")
     return transcript
@@ -304,6 +392,8 @@ def main() -> None:
     input_mode = os.getenv("INPUT_MODE", "text").strip().lower() or "text"
     if input_mode == "voice":
         print("Voice mode is on. Press Enter to start and stop each recording. Say 'quit' or 'exit' to stop.")
+    elif input_mode == "voice_vad":
+        print("VAD voice mode is on. Speak naturally and Rocky will stop listening after trailing silence.")
     else:
         print("Type to Rocky. Use 'quit' or 'exit' to stop.")
 
